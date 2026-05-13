@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=ubuntu
+User=root
 WorkingDirectory=/opt/english_bot
 EnvironmentFile=/opt/english_bot/.env
 ExecStart=/opt/english_bot/venv/bin/python /opt/english_bot/bot.py

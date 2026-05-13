@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pull latest code, update dependencies, restart the bot service.
+# Pull latest code, update dependencies in venv, restart the bot service.
 set -e
 
 REPO_DIR="$(dirname "$(dirname "$(realpath "$0")")")"
@@ -11,7 +11,11 @@ echo "[1/3] Pulling latest changes..."
 git pull origin main
 
 echo "[2/3] Installing/updating dependencies..."
-pip3 install -r requirements.txt
+if [ ! -d "venv" ]; then
+  python3 -m venv venv
+fi
+venv/bin/pip install -q --upgrade pip
+venv/bin/pip install -q -r requirements.txt
 
 echo "[3/3] Restarting service..."
 sudo systemctl restart english_bot

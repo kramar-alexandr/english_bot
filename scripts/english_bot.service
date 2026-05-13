@@ -1,13 +1,13 @@
 [Unit]
 Description=English Learning Telegram Bot
-After=network.target mysql.service
+After=network.target
 
 [Service]
 Type=simple
 User=ubuntu
 WorkingDirectory=/opt/english_bot
 EnvironmentFile=/opt/english_bot/.env
-ExecStart=/usr/bin/python3 /opt/english_bot/bot.py
+ExecStart=/opt/english_bot/venv/bin/python /opt/english_bot/bot.py
 Restart=always
 RestartSec=10
 StandardOutput=journal

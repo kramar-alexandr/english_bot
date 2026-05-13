@@ -152,21 +152,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == CB_KNOW:
         db.increment_know_count(current['id'])
         next_word = pick_next_word(user_id)
-        if not next_word:
-            await query.message.reply_text("🎉 Чудово! Всі слова вивчено!")
-            return
         db.set_current_word(user_id, next_word['id'])
         await query.message.reply_text(next_word['english'], reply_markup=quiz_keyboard())
 
     elif data == CB_DONT_KNOW:
-        next_word = pick_next_word(user_id, exclude_id=current['id'])
+        # exclude current word to avoid showing it twice in a row; fallback if only 1 word
+        next_word = pick_next_word(user_id, exclude_id=current['id']) or pick_next_word(user_id)
         translation = f"📖 {current['english']} — {current['ukrainian']}"
-
-        if not next_word:
-            await query.message.reply_text(translation)
-            await query.message.reply_text("🎉 Більше слів немає! Надішли новий файл.")
-            return
-
         db.set_current_word(user_id, next_word['id'])
         await query.message.reply_text(
             f"{translation}\n\n{next_word['english']}",

@@ -25,13 +25,35 @@ RANDOMIZER_POOL = int(os.getenv('RANDOMIZER_POOL', '10'))
 CB_KNOW = 'know'
 CB_DONT_KNOW = 'dont_know'
 CB_START_QUIZ = 'start_quiz'
+CB_CHANGE_LANG = 'change_lang'
 
+
+# --- language helpers (stored in context.user_data, not DB) ---
+
+def get_lang(context: ContextTypes.DEFAULT_TYPE) -> str:
+    return context.user_data.get('lang', 'en')
+
+
+def toggle_lang(context: ContextTypes.DEFAULT_TYPE) -> str:
+    lang = 'uk' if get_lang(context) == 'en' else 'en'
+    context.user_data['lang'] = lang
+    return lang
+
+
+def lang_label(lang: str) -> str:
+    return "🇬🇧 EN→UA" if lang == 'en' else "🇺🇦 UA→EN"
+
+
+# --- keyboards ---
 
 def quiz_keyboard():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Знаю", callback_data=CB_KNOW),
-        InlineKeyboardButton("❌ Не знаю", callback_data=CB_DONT_KNOW),
-    ]])
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Знаю", callback_data=CB_KNOW),
+            InlineKeyboardButton("❌ Не знаю", callback_data=CB_DONT_KNOW),
+        ],
+        [InlineKeyboardButton("🔄 Змінити мову", callback_data=CB_CHANGE_LANG)],
+    ])
 
 
 def start_keyboard():
@@ -39,6 +61,20 @@ def start_keyboard():
         InlineKeyboardButton("▶️ Почати", callback_data=CB_START_QUIZ),
     ]])
 
+
+# --- word display helpers ---
+
+def word_question(word: dict, lang: str) -> str:
+    return word['english'] if lang == 'en' else word['ukrainian']
+
+
+def word_answer(word: dict, lang: str) -> str:
+    if lang == 'en':
+        return f"📖 {word['english']} — {word['ukrainian']}"
+    return f"📖 {word['ukrainian']} — {word['english']}"
+
+
+# --- commands ---
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -70,11 +106,13 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📊 Статистика:\n"
         f"• Всього слів: {s['total']}\n"
-        f"• Добре знаєш (≥5 разів): {s['well_known']}\n"
-        f"• Вчиш (1–4 рази): {s['learning']}\n"
-        f"• Нові (0 разів): {s['new']}"
+        f"• Добре знаєш EN→UA (≥5): {s['well_known']}\n"
+        f"• Вчиш EN→UA (1–4): {s['learning']}\n"
+        f"• Нові EN→UA (0): {s['new']}"
     )
 
+
+# --- file upload ---
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -121,11 +159,13 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Помилка при обробці файлу. Спробуй ще раз.")
 
 
-def pick_next_word(user_id: int, exclude_id: int = None):
-    words = db.get_least_known_words(user_id, RANDOMIZER_POOL, exclude_id)
-    if not words:
-        return None
-    return random.choice(words)
+# --- quiz logic ---
+
+def pick_next_word(user_id: int, lang: str, exclude_id: int = None) -> dict:
+    words = db.get_least_known_words(user_id, RANDOMIZER_POOL, exclude_id, lang)
+    if not words and exclude_id:
+        words = db.get_least_known_words(user_id, RANDOMIZER_POOL, lang=lang)
+    return random.choice(words) if words else None
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,14 +174,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
     data = query.data
+    lang = get_lang(context)
 
     if data == CB_START_QUIZ:
-        word = pick_next_word(user_id)
+        word = pick_next_word(user_id, lang)
         if not word:
             await query.message.reply_text("⚠️ Немає слів для вивчення! Надішли Excel файл.")
             return
         db.set_current_word(user_id, word['id'])
-        await query.message.reply_text(word['english'], reply_markup=quiz_keyboard())
+        await query.message.reply_text(
+            f"{lang_label(lang)}\n{word_question(word, lang)}",
+            reply_markup=quiz_keyboard(),
+        )
         return
 
     current = db.get_current_word(user_id)
@@ -150,18 +194,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == CB_KNOW:
-        db.increment_know_count(current['id'])
-        next_word = pick_next_word(user_id)
-        db.set_current_word(user_id, next_word['id'])
-        await query.message.reply_text(next_word['english'], reply_markup=quiz_keyboard())
-
-    elif data == CB_DONT_KNOW:
-        # exclude current word to avoid showing it twice in a row; fallback if only 1 word
-        next_word = pick_next_word(user_id, exclude_id=current['id']) or pick_next_word(user_id)
-        translation = f"📖 {current['english']} — {current['ukrainian']}"
+        db.increment_know_count(current['id'], lang)
+        next_word = pick_next_word(user_id, lang)
         db.set_current_word(user_id, next_word['id'])
         await query.message.reply_text(
-            f"{translation}\n\n{next_word['english']}",
+            f"{lang_label(lang)}\n{word_question(next_word, lang)}",
+            reply_markup=quiz_keyboard(),
+        )
+
+    elif data == CB_DONT_KNOW:
+        next_word = pick_next_word(user_id, lang, exclude_id=current['id'])
+        db.set_current_word(user_id, next_word['id'])
+        await query.message.reply_text(
+            f"{word_answer(current, lang)}\n\n{lang_label(lang)}\n{word_question(next_word, lang)}",
+            reply_markup=quiz_keyboard(),
+        )
+
+    elif data == CB_CHANGE_LANG:
+        lang = toggle_lang(context)
+        next_word = pick_next_word(user_id, lang)
+        if not next_word:
+            await query.message.reply_text(f"⚠️ Немає слів. Надішли Excel файл.")
+            return
+        db.set_current_word(user_id, next_word['id'])
+        await query.message.reply_text(
+            f"{lang_label(lang)}\n{word_question(next_word, lang)}",
             reply_markup=quiz_keyboard(),
         )
 

@@ -7,6 +7,8 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv('DB_PATH', 'english_bot.db')
 
+_KNOW_COL = {'en': 'know_count', 'uk': 'know_count_uk'}
+
 
 def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -19,12 +21,13 @@ def init_db():
     try:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS words (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id   INTEGER NOT NULL,
-                english   TEXT    NOT NULL,
-                ukrainian TEXT    NOT NULL,
-                know_count INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT DEFAULT (datetime('now')),
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id       INTEGER NOT NULL,
+                english       TEXT    NOT NULL,
+                ukrainian     TEXT    NOT NULL,
+                know_count    INTEGER NOT NULL DEFAULT 0,
+                know_count_uk INTEGER NOT NULL DEFAULT 0,
+                created_at    TEXT DEFAULT (datetime('now')),
                 UNIQUE(user_id, english)
             );
 
@@ -35,6 +38,12 @@ def init_db():
             );
         """)
         conn.commit()
+        # migration for existing databases without know_count_uk
+        try:
+            conn.execute("ALTER TABLE words ADD COLUMN know_count_uk INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
     finally:
         conn.close()
 
@@ -58,27 +67,28 @@ def add_words(user_id: int, words: List[Tuple[str, str]]) -> int:
 def get_word_count(user_id: int) -> int:
     conn = _get_conn()
     try:
-        row = conn.execute(
+        return conn.execute(
             "SELECT COUNT(*) FROM words WHERE user_id = ?", (user_id,)
-        ).fetchone()
-        return row[0]
+        ).fetchone()[0]
     finally:
         conn.close()
 
 
-def get_least_known_words(user_id: int, limit: int = 10, exclude_id: int = None) -> List[Dict]:
+def get_least_known_words(user_id: int, limit: int = 10,
+                          exclude_id: int = None, lang: str = 'en') -> List[Dict]:
+    col = _KNOW_COL[lang]
     conn = _get_conn()
     try:
         if exclude_id:
             rows = conn.execute(
-                "SELECT id, english, ukrainian, know_count FROM words "
-                "WHERE user_id = ? AND id != ? ORDER BY know_count ASC LIMIT ?",
+                f"SELECT id, english, ukrainian, know_count, know_count_uk FROM words "
+                f"WHERE user_id = ? AND id != ? ORDER BY {col} ASC LIMIT ?",
                 (user_id, exclude_id, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, english, ukrainian, know_count FROM words "
-                "WHERE user_id = ? ORDER BY know_count ASC LIMIT ?",
+                f"SELECT id, english, ukrainian, know_count, know_count_uk FROM words "
+                f"WHERE user_id = ? ORDER BY {col} ASC LIMIT ?",
                 (user_id, limit),
             ).fetchall()
         return [dict(r) for r in rows]
@@ -86,12 +96,11 @@ def get_least_known_words(user_id: int, limit: int = 10, exclude_id: int = None)
         conn.close()
 
 
-def increment_know_count(word_id: int):
+def increment_know_count(word_id: int, lang: str = 'en'):
+    col = _KNOW_COL[lang]
     conn = _get_conn()
     try:
-        conn.execute(
-            "UPDATE words SET know_count = know_count + 1 WHERE id = ?", (word_id,)
-        )
+        conn.execute(f"UPDATE words SET {col} = {col} + 1 WHERE id = ?", (word_id,))
         conn.commit()
     finally:
         conn.close()
@@ -101,8 +110,10 @@ def set_current_word(user_id: int, word_id: int):
     conn = _get_conn()
     try:
         conn.execute(
-            "INSERT INTO user_sessions (user_id, current_word_id, updated_at) VALUES (?, ?, datetime('now')) "
-            "ON CONFLICT(user_id) DO UPDATE SET current_word_id = excluded.current_word_id, updated_at = datetime('now')",
+            "INSERT INTO user_sessions (user_id, current_word_id, updated_at) "
+            "VALUES (?, ?, datetime('now')) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "current_word_id = excluded.current_word_id, updated_at = datetime('now')",
             (user_id, word_id),
         )
         conn.commit()
@@ -114,7 +125,7 @@ def get_current_word(user_id: int) -> Optional[Dict]:
     conn = _get_conn()
     try:
         row = conn.execute(
-            "SELECT w.id, w.english, w.ukrainian, w.know_count "
+            "SELECT w.id, w.english, w.ukrainian, w.know_count, w.know_count_uk "
             "FROM user_sessions us "
             "JOIN words w ON us.current_word_id = w.id "
             "WHERE us.user_id = ?",

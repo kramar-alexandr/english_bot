@@ -8,7 +8,7 @@ from telegram.ext import (
     CallbackQueryHandler, filters, ContextTypes,
 )
 import openpyxl
-from database import Database
+import database as db
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,8 +21,6 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 RANDOMIZER_POOL = int(os.getenv('RANDOMIZER_POOL', '10'))
-
-db = Database()
 
 CB_KNOW = 'know'
 CB_DONT_KNOW = 'dont_know'
@@ -179,6 +177,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN не знайдено в .env файлі")
+
+    db.init_db()
 
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
